@@ -13,11 +13,12 @@
 # limitations under the License.
 
 
+import sys
+
+import numpy as np
 import SimpleITK as sitk
 import torch as th
 import torch.nn.functional as F
-import numpy as np
-import sys
 
 from . import kernelFunction
 
@@ -53,9 +54,9 @@ class Image:
         """
 
         # distinguish between numpy array and torch tensors
-        if type(tensor_image) == np.ndarray:
+        if isinstance(tensor_image, np.ndarray):
             self.image = th.from_numpy(tensor_image).squeeze().unsqueeze(0).unsqueeze(0)
-        elif type(tensor_image) == th.Tensor:
+        elif isinstance(tensor_image, th.Tensor):
             self.image = tensor_image.squeeze().unsqueeze(0).unsqueeze(0)
         else:
             raise Exception("A numpy ndarray or a torch tensor was expected as argument. Got " + str(type(tensor_image)))
