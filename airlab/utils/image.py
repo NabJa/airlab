@@ -19,13 +19,14 @@ import numpy as np
 import SimpleITK as sitk
 import torch as th
 import torch.nn.functional as F
+from monai.data.meta_tensor import MetaTensor
 
 from . import kernelFunction
 
 
 class Image:
     """
-        Class representing an image in airlab
+    Class representing an image in airlab
     """
 
     def __init__(self, *args, **kwargs):
@@ -33,15 +34,22 @@ class Image:
         Constructor for an image object where two cases are distinguished:
 
         - Construct airlab image from an array or tensor (4 arguments)
-        - Construct airlab image from an SimpleITK image (less than 4 arguments
+        - Construct airlab image from an SimpleITK image (less than 4 arguments)
         """
         if len(args) == 4:
             self.initializeForTensors(*args)
         elif len(args) < 4:
             self.initializeForImages(*args)
 
+    def initializeForMetaTensors(self, meta_tensor: MetaTensor):
+        spacing = meta_tensor.meta["affine"].diagonal()[:3].tolist()
+        origin = meta_tensor.meta["affine"][:3, 3].tolist()
 
-    def initializeForTensors(self, tensor_image, image_size, image_spacing, image_origin):
+        self.initializeForTensors(meta_tensor, meta_tensor.size(), spacing, origin)
+
+    def initializeForTensors(
+        self, tensor_image, image_size, image_spacing, image_origin
+    ):
         """
         Constructor for torch tensors and numpy ndarrays
 
@@ -59,17 +67,21 @@ class Image:
         elif isinstance(tensor_image, th.Tensor):
             self.image = tensor_image.squeeze().unsqueeze(0).unsqueeze(0)
         else:
-            raise Exception("A numpy ndarray or a torch tensor was expected as argument. Got " + str(type(tensor_image)))
+            raise Exception(
+                "A numpy ndarray or a torch tensor was expected as argument. Got "
+                + str(type(tensor_image))
+            )
 
         self.size = image_size
         self.spacing = image_spacing
         self.origin = image_origin
         self.dtype = self.image.dtype
         self.device = self.image.device
-        self.ndim = len(self.image.squeeze().shape) # take only non-empty dimensions to count space dimensions
+        self.ndim = len(
+            self.image.squeeze().shape
+        )  # take only non-empty dimensions to count space dimensions
 
-
-    def initializeForImages(self, sitk_image, dtype=None, device='cpu'):
+    def initializeForImages(self, image, dtype=None, device="cpu"):
         """
         Constructor for SimpleITK image
 
@@ -80,11 +92,13 @@ class Image:
         device ('cpu'|'cuda'): on which device the image should be allocated
         return (Image): an airlab image object
         """
-        if type(sitk_image)==sitk.SimpleITK.Image:
-            self.image = th.from_numpy(sitk.GetArrayFromImage(sitk_image)).unsqueeze(0).unsqueeze(0)
-            self.size = sitk_image.GetSize()
-            self.spacing = sitk_image.GetSpacing()
-            self.origin = sitk_image.GetOrigin()
+        if isinstance(image, sitk.SimpleITK.Image):
+            self.image = (
+                th.from_numpy(sitk.GetArrayFromImage(image)).unsqueeze(0).unsqueeze(0)
+            )
+            self.size = image.GetSize()
+            self.spacing = image.GetSpacing()
+            self.origin = image.GetOrigin()
 
             if not dtype is None:
                 self.to(dtype, device)
@@ -94,11 +108,15 @@ class Image:
             self.ndim = len(self.image.squeeze().shape)
 
             self._reverse_axis()
+
+        elif isinstance(image, MetaTensor):
+            self.initializeForMetaTensors(image)
         else:
-            raise Exception("A SimpleITK image was expected as argument. Got " + str(type(sitk_image)))
+            raise Exception(
+                f"A SimpleITK image or MetaTensor was expected as argument. Got {type(image)}"
+            )
 
-
-    def to(self, dtype=None, device='cpu'):
+    def to(self, dtype=None, device="cpu"):
         """
         Converts the image tensor to a specified dtype and moves it to the specified device
         """
@@ -110,7 +128,6 @@ class Image:
         self.device = self.image.device
 
         return self
-
 
     def itk(self):
         """
@@ -127,16 +144,14 @@ class Image:
         itk_image.SetOrigin(origin=self.origin)
         return itk_image
 
-
     def numpy(self):
         """
         Returns a numpy array
         """
         return self.image.cpu().squeeze().numpy()
 
-
     @staticmethod
-    def read(filename, dtype=th.float32, device='cpu'):
+    def read(filename, dtype=th.float32, device="cpu"):
         """
         Static method to directly read an image through the Image class
 
@@ -147,7 +162,6 @@ class Image:
         """
         return Image(sitk.ReadImage(filename, sitk.sitkFloat32), dtype, device)
 
-
     def write(self, filename):
         """
         Write an image to hard drive
@@ -157,7 +171,6 @@ class Image:
         filename (str): filename where the image is written
         """
         sitk.WriteImage(self.itk(), filename)
-
 
     def _reverse_axis(self):
         """
@@ -173,6 +186,8 @@ class Image:
 """
     Object representing a displacement image
 """
+
+
 class Displacement(Image):
     def __init__(self, *args, **kwargs):
         """
@@ -185,7 +200,6 @@ class Displacement(Image):
             self.initializeForTensors(*args)
         elif len(args) < 4:
             self.initializeForImages(*args)
-
 
     def itk(self):
 
@@ -205,7 +219,12 @@ class Displacement(Image):
         return itk_displacement
 
     def magnitude(self):
-       return Image(th.sqrt(th.sum(self.image.pow(2),  -1)).squeeze(), self.size, self.spacing, self.origin)
+        return Image(
+            th.sqrt(th.sum(self.image.pow(2), -1)).squeeze(),
+            self.size,
+            self.spacing,
+            self.origin,
+        )
 
     def numpy(self):
         return self.image.cpu().numpy()
@@ -218,15 +237,14 @@ class Displacement(Image):
         Note: the method is inplace
         """
         # reverse order of axis to follow the convention of SimpleITK
-        order = list(reversed(range(self.ndim-1)))
+        order = list(reversed(range(self.ndim - 1)))
         order.append(len(order))
         self.image = self.image.squeeze_().permute(tuple(order))
-        self.image = flip(self.image, self.ndim-1)
+        self.image = flip(self.image, self.ndim - 1)
         self.image = self.image.unsqueeze(0).unsqueeze(0)
 
-
     @staticmethod
-    def read(filename, dtype=th.float32, device='cpu'):
+    def read(filename, dtype=th.float32, device="cpu"):
         """
         Static method to directly read a displacement field through the Image class
 
@@ -235,7 +253,9 @@ class Displacement(Image):
         device: on which device the displacement field has to be allocated
         return (Displacement): an airlab displacement field
         """
-        return Displacement(sitk.ReadImage(filename, sitk.sitkVectorFloat32), dtype, device)
+        return Displacement(
+            sitk.ReadImage(filename, sitk.sitkVectorFloat32), dtype, device
+        )
 
 
 def flip(x, dim):
@@ -250,10 +270,13 @@ def flip(x, dim):
     indices[dim] = th.arange(x.size(dim) - 1, -1, -1, dtype=th.long, device=x.device)
     return x[tuple(indices)]
 
+
 """
     Convert an image to tensor representation
 """
-def read_image_as_tensor(filename, dtype=th.float32, device='cpu'):
+
+
+def read_image_as_tensor(filename, dtype=th.float32, device="cpu"):
 
     itk_image = sitk.ReadImage(filename, sitk.sitkFloat32)
 
@@ -263,15 +286,20 @@ def read_image_as_tensor(filename, dtype=th.float32, device='cpu'):
 """
     Convert an image to tensor representation
 """
+
+
 def create_image_from_image(tensor_image, image):
     return Image(tensor_image, image.size, image.spacing, image.origin)
-
 
 
 """
     Convert numpy image to AirlLab image format
 """
-def image_from_numpy(image, pixel_spacing, image_origin, dtype=th.float32, device='cpu'):
+
+
+def image_from_numpy(
+    image, pixel_spacing, image_origin, dtype=th.float32, device="cpu"
+):
     tensor_image = th.from_numpy(image).unsqueeze(0).unsqueeze(0)
     tensor_image = tensor_image.to(dtype=dtype, device=device)
     return Image(tensor_image, image.shape, pixel_spacing, image_origin)
@@ -280,6 +308,8 @@ def image_from_numpy(image, pixel_spacing, image_origin, dtype=th.float32, devic
 """
     Convert an image to tensor representation
 """
+
+
 def create_displacement_image_from_image(tensor_displacement, image):
     return Displacement(tensor_displacement, image.size, image.spacing, image.origin)
 
@@ -287,7 +317,9 @@ def create_displacement_image_from_image(tensor_displacement, image):
 """
     Create tensor image representation
 """
-def create_tensor_image_from_itk_image(itk_image, dtype=th.float32, device='cpu'):
+
+
+def create_tensor_image_from_itk_image(itk_image, dtype=th.float32, device="cpu"):
 
     # transform image in a unit direction
     image_dim = itk_image.GetDimension()
@@ -304,10 +336,11 @@ def create_tensor_image_from_itk_image(itk_image, dtype=th.float32, device='cpu'
 
     # adjust image spacing vector size if image contains empty dimension
     if len(image_size) != image_dim:
-        image_spacing = image_spacing[0:len(image_size)]
+        image_spacing = image_spacing[0 : len(image_size)]
 
-    tensor_image = th.tensor(np_image, dtype=dtype, device=device).unsqueeze(0).unsqueeze(0)
-
+    tensor_image = (
+        th.tensor(np_image, dtype=dtype, device=device).unsqueeze(0).unsqueeze(0)
+    )
 
     return Image(tensor_image, image_size, image_spacing, image_origin)
 
@@ -315,29 +348,33 @@ def create_tensor_image_from_itk_image(itk_image, dtype=th.float32, device='cpu'
 """
     Create an image pyramide  
 """
+
+
 def create_image_pyramid(image, down_sample_factor):
 
     image_dim = len(image.size)
     image_pyramide = []
     if image_dim == 2:
         for level in down_sample_factor:
-            sigma = (th.tensor(level)/2).to(dtype=th.float32)
+            sigma = (th.tensor(level) / 2).to(dtype=th.float32)
 
             kernel = kernelFunction.gaussian_kernel_2d(sigma.numpy(), asTensor=True)
-            padding = np.array([(x - 1)/2 for x in kernel.size()], dtype=int).tolist()
+            padding = np.array([(x - 1) / 2 for x in kernel.size()], dtype=int).tolist()
             kernel = kernel.unsqueeze(0).unsqueeze(0)
             kernel = kernel.to(dtype=image.dtype, device=image.device)
 
             image_sample = F.conv2d(image.image, kernel, stride=level, padding=padding)
             image_size = image_sample.size()[-image_dim:]
-            image_spacing = [x*y for x, y in zip(image.spacing, level)]
+            image_spacing = [x * y for x, y in zip(image.spacing, level)]
             image_origin = image.origin
-            image_pyramide.append(Image(image_sample, image_size, image_spacing, image_origin))
+            image_pyramide.append(
+                Image(image_sample, image_size, image_spacing, image_origin)
+            )
 
         image_pyramide.append(image)
     elif image_dim == 3:
         for level in down_sample_factor:
-            sigma = (th.tensor(level)/2).to(dtype=th.float32)
+            sigma = (th.tensor(level) / 2).to(dtype=th.float32)
 
             kernel = kernelFunction.gaussian_kernel_3d(sigma.numpy(), asTensor=True)
             padding = np.array([(x - 1) / 2 for x in kernel.size()], dtype=int).tolist()
@@ -346,9 +383,11 @@ def create_image_pyramid(image, down_sample_factor):
 
             image_sample = F.conv3d(image.image, kernel, stride=level, padding=padding)
             image_size = image_sample.size()[-image_dim:]
-            image_spacing = [x*y for x, y in zip(image.spacing, level)]
+            image_spacing = [x * y for x, y in zip(image.spacing, level)]
             image_origin = image.origin
-            image_pyramide.append(Image(image_sample, image_size, image_spacing, image_origin))
+            image_pyramide.append(
+                Image(image_sample, image_size, image_spacing, image_origin)
+            )
 
         image_pyramide.append(image)
 
