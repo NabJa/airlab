@@ -102,7 +102,7 @@ def upsample_displacement(displacement, new_size, interpolation="linear"):
 """
 
 
-def warp_image(image, displacement):
+def warp_image(image, displacement, mode="bilinear"):
 
     image_size = image.size
 
@@ -112,6 +112,7 @@ def warp_image(image, displacement):
     warped_image = F.grid_sample(
         image.image,
         displacement + grid,
+        mode=mode,
         padding_mode="border",
         align_corners=False,
     )
